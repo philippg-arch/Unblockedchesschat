@@ -10,7 +10,7 @@ const localVideo = document.getElementById('local-video');
 const remoteVideo = document.getElementById('remote-video');
 
 const PIECES = {
-  wp: '♙', wn: '♘', wb: '♗', wr: '♖', wq: '♕', wk: '♔',
+  wp: '♟', wn: '♞', wb: '♝', wr: '♜', wq: '♛', wk: '♚',
   bp: '♟', bn: '♞', bb: '♝', br: '♜', bq: '♛', bk: '♚',
 };
 

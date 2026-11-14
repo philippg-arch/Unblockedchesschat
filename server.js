@@ -71,6 +71,13 @@ function getRatingForPlayer(name) {
   };
 }
 
+function getLeaderboard() {
+  return [...playerPoints.entries()]
+    .map(([name, points]) => ({ name, points }))
+    .sort((first, second) => second.points - first.points || first.name.localeCompare(second.name))
+    .slice(0, 5);
+}
+
 function createRoom(roomName) {
   return {
     name: roomName,
@@ -128,9 +135,12 @@ function removePlayerFromRoom(socket) {
 }
 
 function awardPoints(room) {
+  const players = [...room.players.values()];
   const winnerColor = room.game.turn() === 'w' ? 'b' : 'w';
-  const winner = [...room.players.values()].find((player) => player.color === winnerColor);
-  const loser = [...room.players.values()].find((player) => player.color !== winnerColor);
+  const winner = room.game.in_checkmate()
+    ? players.find((player) => player.color === winnerColor)
+    : null;
+  const loser = winner ? players.find((player) => player.color !== winnerColor) : null;
 
   if (winner) {
     const next = (playerPoints.get(winner.name) || 0) + 30;
@@ -142,16 +152,21 @@ function awardPoints(room) {
     playerPoints.set(loser.name, next);
   }
 
+  players.forEach((player) => {
+    if (!playerPoints.has(player.name)) playerPoints.set(player.name, 0);
+  });
+
   room.winner = winner ? winner.name : null;
 
   return {
     winner: room.winner,
-    ratings: [...room.players.values()].map((player) => getRatingForPlayer(player.name)),
+    ratings: players.map((player) => getRatingForPlayer(player.name)),
   };
 }
 
 io.on('connection', (socket) => {
   socket.data = socket.data || {};
+  socket.emit('leaderboard-update', getLeaderboard());
 
   socket.on('join-game', ({ roomName, name } = {}) => {
     const cleanRoomName = String(roomName || '').trim().toUpperCase().slice(0, 20);
@@ -180,6 +195,7 @@ io.on('connection', (socket) => {
       id: socket.id,
       name: cleanName,
       color,
+      mediaReady: false,
     });
 
     socket.join(cleanRoomName);
@@ -201,6 +217,10 @@ io.on('connection', (socket) => {
       roomName: cleanRoomName,
       players: publicPlayers(room),
     });
+
+    if ([...room.players.values()].some((player) => player.id !== socket.id && player.mediaReady)) {
+      socket.emit('media-ready');
+    }
 
     if (room.players.size === 2) {
       room.game = new Chess();
@@ -262,6 +282,7 @@ io.on('connection', (socket) => {
         state.gameOver = true;
         state.winner = room.winner;
         state.ratings = prize.ratings;
+        io.emit('leaderboard-update', getLeaderboard());
       }
 
       io.to(roomName).emit('game-state', state);
@@ -291,6 +312,15 @@ io.on('connection', (socket) => {
     if (!room || !room.players.has(to)) return;
 
     io.to(to).emit('signal', { from: socket.id, data });
+  });
+
+  socket.on('media-ready', () => {
+    const room = socket.data.roomName ? rooms.get(socket.data.roomName) : null;
+    const player = room?.players.get(socket.id);
+    if (!room || !player) return;
+
+    player.mediaReady = true;
+    socket.to(socket.data.roomName).emit('media-ready');
   });
 
   socket.on('disconnect', () => removePlayerFromRoom(socket));

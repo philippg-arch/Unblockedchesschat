@@ -4,6 +4,7 @@ const boardElement = document.getElementById('board');
 const statusElement = document.getElementById('status');
 const ratingElement = document.getElementById('player-rating');
 const playersListElement = document.getElementById('players');
+const leaderboardElement = document.getElementById('leaderboard');
 const chatLogElement = document.getElementById('chat-log');
 const localVideo = document.getElementById('local-video');
 const remoteVideo = document.getElementById('remote-video');
@@ -45,6 +46,8 @@ let localStream = null;
 let peerConnection = null;
 let remoteDescriptionSet = false;
 let pendingCandidates = [];
+let opponentMediaReady = false;
+let offerInProgress = false;
 let currentRoomName = '';
 let currentOpponentName = '';
 let selectedMode = 'Rapid';
@@ -110,6 +113,42 @@ function renderGameHistory() {
       copy.append(title, description);
       container.append(mark, copy);
       return;
+    }
+
+    function renderLeaderboard(players) {
+      leaderboardElement.replaceChildren();
+
+      if (!Array.isArray(players) || players.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'leader-empty';
+        empty.textContent = 'No completed games yet. Be the first on the board.';
+        leaderboardElement.appendChild(empty);
+        return;
+      }
+
+      players.forEach((player, index) => {
+        const row = document.createElement('div');
+        row.className = 'leader-row';
+
+        const rank = document.createElement('span');
+        rank.className = `leader-rank${index === 0 ? ' gold-rank' : ''}`;
+        rank.textContent = String(index + 1).padStart(2, '0');
+
+        const avatar = document.createElement('span');
+        avatar.className = 'leader-avatar';
+        avatar.textContent = '♞';
+        avatar.setAttribute('aria-hidden', 'true');
+
+        const name = document.createElement('strong');
+        name.textContent = player.name;
+
+        const rating = document.createElement('span');
+        rating.className = 'leader-rating';
+        rating.textContent = Number(player.points).toLocaleString();
+
+        row.append(rank, avatar, name, rating);
+        leaderboardElement.appendChild(row);
+      });
     }
 
     history.slice(0, 4).forEach((entry) => {
@@ -246,14 +285,14 @@ function setStatus(message) {
 function renderBoard() {
   boardElement.innerHTML = '';
 
-  const rows = myColor === 'b' ? [8, 7, 6, 5, 4, 3, 2, 1] : [1, 2, 3, 4, 5, 6, 7, 8];
+  const rows = myColor === 'b' ? [1, 2, 3, 4, 5, 6, 7, 8] : [8, 7, 6, 5, 4, 3, 2, 1];
   const files = myColor === 'b' ? ['h', 'g', 'f', 'e', 'd', 'c', 'b', 'a'] : ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
   rows.forEach((rank) => {
     files.forEach((file) => {
       const squareName = `${file}${rank}`;
       const square = document.createElement('div');
-      square.className = `square ${(rank + file.charCodeAt(0)) % 2 === 0 ? 'light' : 'dark'}`;
+      square.className = `square ${(rank + file.charCodeAt(0)) % 2 === 0 ? 'dark' : 'light'}`;
       square.dataset.square = squareName;
 
       if (selectedSquare === squareName) {
@@ -342,9 +381,7 @@ function updatePlayers(players) {
   opponentId = opponent ? opponent.id : null;
   currentOpponentName = opponent ? opponent.name : '';
 
-  if (myColor === 'w' && opponentId && localStream) {
-    startPeerConnection();
-  }
+  startPeerConnection();
 }
 
 function appendChatMessage(name, text) {
@@ -358,46 +395,82 @@ function appendChatMessage(name, text) {
 function attachLocalStream() {
   if (!localStream) return;
   localVideo.srcObject = localStream;
+  localStream.getTracks().forEach((track) => {
+    const alreadySent = peerConnection?.getSenders().some((sender) => sender.track === track);
+    if (peerConnection && !alreadySent) peerConnection.addTrack(track, localStream);
+  });
+}
 
+function setMediaStatus(message) {
+  document.getElementById('media-status').textContent = message;
+}
+
+function closePeerConnection() {
   if (peerConnection) {
-    localStream.getTracks().forEach((track) => {
-      const alreadySent = peerConnection.getSenders().some((sender) => sender.track === track);
-      if (!alreadySent) peerConnection.addTrack(track, localStream);
-    });
+    peerConnection.close();
+    peerConnection = null;
   }
+  remoteDescriptionSet = false;
+  offerInProgress = false;
+  pendingCandidates = [];
+  remoteVideo.srcObject = null;
+}
+
+function createPeerConnection() {
+  peerConnection = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+    ],
+  });
+
+  peerConnection.ontrack = (event) => {
+    if (event.streams[0]) {
+      remoteVideo.srcObject = event.streams[0];
+    } else {
+      if (!remoteVideo.srcObject) remoteVideo.srcObject = new MediaStream();
+      remoteVideo.srcObject.addTrack(event.track);
+    }
+    remoteVideo.play().catch(() => {
+      setMediaStatus('Video connected. Tap your opponent’s video to start playback.');
+    });
+    setMediaStatus('Connected. Your opponent’s camera and microphone are on.');
+  };
+
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate && opponentId) {
+      socket.emit('signal', {
+        to: opponentId,
+        data: { type: 'candidate', candidate: event.candidate },
+      });
+    }
+  };
+
+  peerConnection.onconnectionstatechange = () => {
+    if (peerConnection.connectionState === 'connected') {
+      setMediaStatus('Connected. Your opponent’s camera and microphone are on.');
+    } else if (peerConnection.connectionState === 'failed') {
+      setMediaStatus('Could not connect. Check your network or try another network.');
+    } else if (peerConnection.connectionState === 'disconnected') {
+      setMediaStatus('Connection interrupted. Waiting to reconnect…');
+    }
+  };
+
+  attachLocalStream();
+  return peerConnection;
 }
 
 function startPeerConnection() {
-  if (!opponentId || !localStream) return;
-
-  if (!peerConnection) {
-    peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
-
-    peerConnection.ontrack = (event) => {
-      remoteVideo.srcObject = event.streams[0];
-    };
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('signal', {
-          to: opponentId,
-          data: { type: 'candidate', candidate: event.candidate },
-        });
-      }
-    };
-
-    peerConnection.onconnectionstatechange = () => {
-      if (peerConnection.connectionState === 'failed') {
-        setStatus('Video call connection failed.');
-      }
-    };
-
-    attachLocalStream();
+  if (!opponentId || !localStream || !opponentMediaReady) return;
+  if (typeof RTCPeerConnection !== 'function') {
+    setMediaStatus('This browser does not support video calls. Try a current version of Chrome, Firefox, or Safari.');
+    return;
   }
 
-  if (myColor === 'w' && !peerConnection.localDescription) {
+  if (!peerConnection) createPeerConnection();
+
+  if (myColor === 'w' && !peerConnection.localDescription && !offerInProgress) {
+    offerInProgress = true;
     peerConnection.createOffer()
       .then((offer) => peerConnection.setLocalDescription(offer))
       .then(() => {
@@ -405,8 +478,15 @@ function startPeerConnection() {
           to: opponentId,
           data: { type: 'offer', sdp: peerConnection.localDescription },
         });
+        setMediaStatus('Calling your opponent…');
       })
-      .catch((error) => setStatus(`Video setup error: ${error.message}`));
+      .catch((error) => {
+        console.error('Could not start the video call.', error);
+        setMediaStatus(`Could not start the call: ${error.message}`);
+      })
+      .finally(() => {
+        offerInProgress = false;
+      });
   }
 }
 
@@ -414,34 +494,12 @@ async function handlePeerSignal({ from, data }) {
   if (!data) return;
   opponentId = from;
 
-  if (!localStream) return;
-
-  if (!peerConnection) {
-    peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
-
-    peerConnection.ontrack = (event) => {
-      remoteVideo.srcObject = event.streams[0];
-    };
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        socket.emit('signal', {
-          to: opponentId,
-          data: { type: 'candidate', candidate: event.candidate },
-        });
-      }
-    };
-
-    peerConnection.onconnectionstatechange = () => {
-      if (peerConnection.connectionState === 'failed') {
-        setStatus('Video call connection failed.');
-      }
-    };
-
-    attachLocalStream();
+  if (!localStream) {
+    setMediaStatus('Enable your camera and microphone to answer the call.');
+    return;
   }
+
+  if (!peerConnection) createPeerConnection();
 
   try {
     if (data.type === 'offer') {
@@ -472,41 +530,85 @@ async function handlePeerSignal({ from, data }) {
       }
     }
   } catch (error) {
-    setStatus(`Video signal error: ${error.message}`);
+    console.error('Could not process video call signaling.', error);
+    setMediaStatus(`Video signal error: ${error.message}`);
   }
 }
 
 async function enableCameraAndMic() {
+  if (localStream) {
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (!videoTrack) {
+      setMediaStatus('No camera was found. Check that a camera is connected.');
+      return;
+    }
+
+    videoTrack.enabled = !videoTrack.enabled;
+    document.getElementById('camera-toggle').textContent = videoTrack.enabled
+      ? 'Disable camera'
+      : 'Enable camera';
+    setMediaStatus(videoTrack.enabled
+      ? 'Camera is on. Your microphone setting is unchanged.'
+      : 'Camera is off. Your microphone setting is unchanged.');
+    return;
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    setMediaStatus('Camera and microphone require a secure HTTPS connection and browser support.');
+    return;
+  }
+
+  if (typeof RTCPeerConnection !== 'function') {
+    setMediaStatus('Video calling is not supported by this browser. Try a current version of Chrome, Firefox, or Safari.');
+    return;
+  }
+
+  const cameraButton = document.getElementById('camera-toggle');
+  cameraButton.disabled = true;
+  setMediaStatus('Requesting camera and microphone access…');
+
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
       video: true,
       audio: true,
     });
     attachLocalStream();
-    setStatus('Camera and microphone enabled.');
-    if (opponentId) {
-      startPeerConnection();
-    }
+    cameraButton.textContent = 'Disable camera';
+    document.getElementById('mute-toggle').textContent = 'Mute mic';
+    setMediaStatus(opponentId
+      ? 'Camera and microphone are on. Waiting for your opponent to enable theirs…'
+      : 'Camera and microphone are on. Join a room to call your opponent.');
+    socket.emit('media-ready');
+    startPeerConnection();
   } catch (error) {
-    setStatus(`Camera access blocked: ${error.message}`);
+    console.error('Could not access the camera and microphone.', error);
+    const reason = error.name === 'NotAllowedError'
+      ? 'Allow camera and microphone access in your browser settings, then try again.'
+      : error.name === 'NotFoundError'
+        ? 'No camera or microphone was found. Connect a device and try again.'
+        : error.message;
+    setMediaStatus(`Camera or microphone unavailable: ${reason}`);
+  } finally {
+    cameraButton.disabled = false;
   }
 }
 
 function toggleMute() {
   if (!localStream) {
-    setStatus('Enable camera first to use audio.');
+    setMediaStatus('Enable your camera and microphone before changing audio.');
     return;
   }
 
   const audioTrack = localStream.getAudioTracks()[0];
   if (!audioTrack) {
-    setStatus('No microphone was found.');
+    setMediaStatus('No microphone was found. Check that a microphone is connected.');
     return;
   }
 
   audioTrack.enabled = !audioTrack.enabled;
   const button = document.getElementById('mute-toggle');
   button.textContent = audioTrack.enabled ? 'Mute mic' : 'Unmute mic';
+  setMediaStatus(audioTrack.enabled ? 'Microphone is on.' : 'Microphone is muted.');
 }
 
 document.getElementById('join-room').addEventListener('click', () => {
@@ -536,6 +638,11 @@ document.getElementById('chat-form').addEventListener('submit', (event) => {
 });
 
 socket.on('joined', ({ roomName, color, rating, players, state }) => {
+  if (currentRoomName && currentRoomName !== roomName) {
+    closePeerConnection();
+    opponentMediaReady = false;
+  }
+  currentRoomName = roomName;
   myColor = color;
   myName = document.getElementById('player-name').value.trim();
   updateRatingChip(rating.points, rating.tier);
@@ -543,6 +650,7 @@ socket.on('joined', ({ roomName, color, rating, players, state }) => {
   game.load(state.fen);
   renderBoard();
   updatePlayers(players);
+  if (localStream) socket.emit('media-ready');
 });
 
 socket.on('lobby-update', ({ players }) => {
@@ -594,6 +702,9 @@ socket.on('chat-message', ({ name, text }) => {
 socket.on('opponent-left', () => {
   setStatus('Your opponent left the room.');
   updatePlayers([]);
+  opponentMediaReady = false;
+  closePeerConnection();
+  setMediaStatus('Your opponent left the room. Camera and microphone remain on.');
 });
 
 socket.on('game-error', (message) => {
@@ -602,8 +713,14 @@ socket.on('game-error', (message) => {
 
 socket.on('signal', handlePeerSignal);
 
-socket.on('joined', ({ roomName }) => {
-  currentRoomName = roomName;
+socket.on('leaderboard-update', renderLeaderboard);
+
+socket.on('media-ready', () => {
+  opponentMediaReady = true;
+  setMediaStatus(localStream
+    ? 'Your opponent is ready. Connecting…'
+    : 'Your opponent enabled their camera and microphone. Enable yours to connect.');
+  startPeerConnection();
 });
 
 socket.on('game-start', ({ roomName }) => {

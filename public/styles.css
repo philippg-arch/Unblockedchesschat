@@ -988,7 +988,7 @@ h1 {
 
 .white-piece {
   color: #fff;
-  -webkit-text-stroke: 1px #353535;
+  -webkit-text-stroke: 1.5px #000;
 }
 
 .black-piece {

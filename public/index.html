@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Unblocked Chess Chat</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Live multiplayer</p>
+          <h1>Unblocked Chess Chat</h1>
+        </div>
+
+        <div class="top-actions">
+          <input id="player-name" type="text" maxlength="24" placeholder="Your name" />
+          <input id="room-code" type="text" maxlength="20" placeholder="Room code" />
+          <button id="join-room" class="primary">Join room</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="game-panel">
+          <div class="hud">
+            <div>
+              <span class="label">Status</span>
+              <div id="status" class="status-text">Waiting for a room.</div>
+            </div>
+
+            <div>
+              <span class="label">Rating</span>
+              <div id="player-rating" class="rating-chip">0 points · Beginner</div>
+            </div>
+          </div>
+
+          <div id="board" class="board" aria-label="Chess board"></div>
+        </section>
+
+        <aside class="sidebar">
+          <div class="card">
+            <h3>Players</h3>
+            <div id="players" class="players-list">No players yet</div>
+          </div>
+
+          <div class="card camera-panel">
+            <h3>Camera &amp; mic</h3>
+            <div class="video-grid">
+              <video id="remote-video" autoplay playsinline></video>
+              <video id="local-video" autoplay muted playsinline></video>
+            </div>
+
+            <div class="camera-actions">
+              <button id="camera-toggle" class="secondary">Enable camera</button>
+              <button id="mute-toggle" class="secondary">Mute mic</button>
+            </div>
+          </div>
+
+          <div class="card chat-panel">
+            <h3>Chat</h3>
+            <div id="chat-log" class="chat-log"></div>
+
+            <form id="chat-form" class="chat-form">
+              <input id="chat-input" type="text" maxlength="500" placeholder="Type a message…" />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

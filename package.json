@@ -1,0 +1,14 @@
+{
+  "name": "Unblockedchesschat",
+  "version": "1.0.0",
+  "description": "Browser chess game with chat, webcam, and player ranks",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "chess.js": "^0.10.3",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
